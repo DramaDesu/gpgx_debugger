@@ -3,7 +3,7 @@
  *
  *  Genesis Plus GX libretro port
  *
- *  Copyright Eke-Eke (2007-2022)
+ *  Copyright Eke-Eke (2007-2016)
  *
  *  Copyright Daniel De Matteis (2012-2016)
  *
@@ -91,7 +91,7 @@ typedef struct
   uint8 padtype;
 } t_input_config;
 
-typedef struct
+typedef struct 
 {
   char version[16];
   uint8 hq_fm;
@@ -102,14 +102,9 @@ typedef struct
 #ifdef HAVE_YM3438_CORE
   uint8 ym3438;
 #endif
-#ifdef HAVE_OPLL_CORE
-  uint8 opll;
-#endif
   uint8 mono;
   int16 psg_preamp;
   int16 fm_preamp;
-  int16 cdda_volume;
-  int16 pcm_volume;
   uint16 lp_range;
   int16 low_freq;
   int16 high_freq;
@@ -124,30 +119,20 @@ typedef struct
   uint8 addr_error;
   uint8 bios;
   uint8 lock_on;
-  uint8 add_on;
   uint8 overscan;
   uint8 aspect_ratio;
   uint8 ntsc;
   uint8 lcd;
   uint8 gg_extra;
-  uint8 left_border;
   uint8 render;
   t_input_config input[MAX_INPUTS];
   uint8 invert_mouse;
   uint8 gun_cursor;
   uint32 overclock;
   uint8 no_sprite_limit;
-  uint8 enhanced_vscroll;
-  uint8 enhanced_vscroll_limit;
-  uint8 cd_latency;
-#ifdef USE_PER_SOUND_CHANNELS_CONFIG
-  unsigned int psg_ch_volumes[4];
-  int32 md_ch_volumes[6];
-  signed int sms_fm_ch_volumes[9];
-#endif
-} t_config;
+} config_t;
 
-extern t_config config;
+extern config_t config;
 
 extern char GG_ROM[256];
 extern char AR_ROM[256];
