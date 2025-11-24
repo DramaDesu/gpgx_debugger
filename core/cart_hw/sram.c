@@ -2,7 +2,7 @@
  *  Genesis Plus
  *  Backup RAM support
  *
- *  Copyright (C) 2007-2020  Eke-Eke (Genesis Plus GX)
+ *  Copyright (C) 2007-2025  Eke-Eke (Genesis Plus GX)
  *
  *  Redistribution and use of this code or any derivative works are permitted
  *  provided that the following conditions are met:
@@ -59,13 +59,10 @@ T_SRAM sram;
  *
  * Assuming max. 64k backup RAM throughout
  ****************************************************************************/
-void sram_init()
+void sram_init(void)
 {
-  memset(&sram, 0, sizeof (T_SRAM));
-
-  /* backup RAM data is stored above cartridge ROM area, at $800000-$80FFFF (max. 64K) */
-  if (cart.romsize > 0x800000) return;
-  sram.sram = cart.rom + 0x800000;
+  /* disable Backup RAM by default */
+  sram.detected = sram.on = sram.custom = sram.start = sram.end = 0;
 
   /* initialize Backup RAM */
   if (strstr(rominfo.international,"Sonic 1 Remastered"))
@@ -101,17 +98,35 @@ void sram_init()
       sram.start = 0x200001;
       sram.end = 0x203fff;
     }
+    else if (strstr(rominfo.product,"00000000-00") &&
+             (((rominfo.checksum == 0xcdf5) && (rominfo.realchecksum == 0x603a)) ||
+              ((rominfo.checksum == 0x6bd5) && (rominfo.realchecksum == 0x1fea)) ||
+              ((rominfo.checksum == 0x45c1) && (rominfo.realchecksum == 0xc613))))
+    {
+      /* Life on Mars / Life on Earth Reimagined / The Secret Of The Four Winds (wrong addresses) */
+      sram.start = 0x3f0000;
+      sram.end = 0x3fffff;
+    }
 
-    /* fixe games indicating internal RAM as volatile external RAM (Feng Kuang Tao Hua Yuan) */
+    /* fixes games indicating internal RAM as volatile external RAM (Feng Kuang Tao Hua Yuan) */
     else if (sram.start == 0xff0000)
     {
       /* backup RAM should be disabled */
       sram.on = 0;
     }
 
-    /* fixe other bad header informations */
+    /* fixes games with invalid SRAM start address */
+    else if (sram.start >= 0x800000)
+    {
+      /* forces 64KB static RAM mapped to $200000-$20ffff (default) */
+      sram.start = 0x200000;
+      sram.end = 0x20ffff;
+    }
+
+    /* fixes games with invalid SRAM end address */
     else if ((sram.start > sram.end) || ((sram.end - sram.start) >= 0x10000))
     {
+      /* forces 64KB static RAM max */
       sram.end = sram.start + 0xffff;
     }
   }
@@ -188,6 +203,13 @@ void sram_init()
         sram.start = 0x200001;
         sram.end = 0x203fff;
       }
+    }
+    else if (strstr(rominfo.international,"COLOCODX") != NULL)
+    {
+      /* ColocoDX */
+      sram.on = 1;
+      sram.start = 0x7e0000;
+      sram.end = 0x7fffff;
     }
 
     /* auto-detect games which need disabled backup RAM */

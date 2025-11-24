@@ -294,7 +294,7 @@ void m68k_run(unsigned int cycles)
 
 #ifdef HOOK_CPU
     /* Trigger execution hook */
-    if (cpu_hook)
+    if (UNLIKELY(cpu_hook))
       cpu_hook(HOOK_M68K_E, 0, REG_PC, 0);
 #endif
 
@@ -303,6 +303,13 @@ void m68k_run(unsigned int cycles)
 
     /* Decode next instruction */
     REG_IR = m68ki_read_imm_16();
+
+    /* 68K bus access refresh delay (Mega Drive / Genesis specific) */
+    if (m68k.cycles >= m68k.refresh_cycles)
+    {
+      m68k.refresh_cycles = m68k.cycles + (128*7);
+      m68k.cycles += (2*7);
+    }
 
     /* Execute instruction */
     m68ki_instruction_jump_table[REG_IR]();
@@ -387,6 +394,9 @@ void m68k_pulse_reset(void)
 #endif
 
   USE_CYCLES(CYC_EXCEPTION[EXCEPTION_RESET]);
+
+  /* Synchronize 68k bus refresh mechanism (Mega Drive / Genesis specific) */
+  m68k.refresh_cycles = ((m68k.cycles / (128*7)) * (128*7)) + 128*7;
 }
 
 void m68k_pulse_halt(void)
