@@ -2,7 +2,7 @@
  *  Genesis Plus
  *  Backup RAM support
  *
- *  Copyright (C) 2007-2025  Eke-Eke (Genesis Plus GX)
+ *  Copyright (C) 2007-2026  Eke-Eke (Genesis Plus GX)
  *
  *  Redistribution and use of this code or any derivative works are permitted
  *  provided that the following conditions are met:
@@ -39,15 +39,20 @@
 #ifndef _SRAM_H_
 #define _SRAM_H_
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+typedef enum
+{
+  DEFAULT_SRAM = 0,
+  EEPROM_I2C,
+  EEPROM_SPI,
+  EEPROM_MICROWIRE,
+  FLASH_MEMORY
+} E_SRAM_TYPE;
 
 typedef struct
 {
   uint8 detected;
   uint8 on;
-  uint8 custom;
+  uint8 type;
   uint32 start;
   uint32 end;
   uint32 crc;
@@ -63,9 +68,5 @@ extern void sram_write_word(unsigned int address, unsigned int data);
 
 /* global variables */
 extern T_SRAM sram;
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif
