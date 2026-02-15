@@ -65,8 +65,4 @@ extern _zbank_memory_map zbank_memory_map[256];
 }
 #endif
 
-#ifdef __cplusplus
-}
-#endif
-
 #endif /* _MEMBNK_H_ */
