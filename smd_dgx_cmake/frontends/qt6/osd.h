@@ -1,12 +1,10 @@
-
-#ifndef _OSD_H_
-#define _OSD_H_
+#ifndef _OSD_QT_H_
+#define _OSD_QT_H_
 
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>
-
 #include <stdlib.h>
 
 #include "main_common.h"
@@ -14,9 +12,7 @@
 #include "error.h"
 #include "unzip.h"
 #include "fileio.h"
-#include "main.h"
-
-#define osd_input_update sdl_input_update
+#include "main_qt.h"
 
 #define GG_ROM      "./ggenie.bin"
 #define AR_ROM      "./areplay.bin"
@@ -31,4 +27,4 @@
 #define MS_BIOS_JP  "./bios_J.sms"
 #define GG_BIOS     "./bios.gg"
 
-#endif /* _OSD_H_ */
+#endif /* _OSD_QT_H_ */
