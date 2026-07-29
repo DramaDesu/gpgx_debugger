@@ -142,6 +142,16 @@ static uint8 pending;           /* Pending write flag */
 static uint8 code;              /* Code register */
 static uint16 addr;             /* Address register */
 static uint16 addr_latch;       /* Latched A15, A14 of address */
+
+#ifdef HOOK_CPU
+/* The pending VDP access, for the debugger: which memory the next data-port
+   write lands in and where. Both are file-static, hence this accessor. */
+void vdp_debug_get_access(unsigned int *out_addr, unsigned int *out_code)
+{
+  if (out_addr) *out_addr = addr;
+  if (out_code) *out_code = code;
+}
+#endif
 static uint16 sat_base_mask;    /* Base bits of SAT */
 static uint16 sat_addr_mask;    /* Index bits of SAT */
 static uint16 dma_src;          /* DMA source address */
