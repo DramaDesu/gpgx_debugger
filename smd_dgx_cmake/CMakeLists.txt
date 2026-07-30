@@ -1,4 +1,15 @@
-﻿cmake_minimum_required (VERSION 3.20)
+cmake_minimum_required (VERSION 3.20)
+
+# Pick up vcpkg when the caller has not chosen a toolchain and VCPKG_ROOT is
+# set. This cannot live in the presets: a preset cache variable is expanded
+# unconditionally, so "$env{VCPKG_ROOT}/scripts/..." collapses to an invalid
+# path — and a hard configure error — on a machine that has no vcpkg. Here it
+# is simply skipped, and dependencies resolve from the system instead, which is
+# how a Linux build normally wants to work.
+if (NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
+  set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      CACHE STRING "Vcpkg toolchain file")
+endif()
 
 # Enable Hot Reload for MSVC compilers if supported.
 if (POLICY CMP0141)
@@ -8,8 +19,7 @@ endif()
 
 project ("smd_dgx" LANGUAGES C CXX)
 
-set(SMD_IDA_ROOT "${CMAKE_CURRENT_LIST_DIR}/../smd_ida_tools2")
-set(GX_ROOT "${CMAKE_CURRENT_LIST_DIR}/../Genesis-Plus-GX")
+set(GX_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
 
 include(cmake/gx_options.cmake)
 include(cmake/gx_core.cmake)
@@ -22,67 +32,179 @@ gx_add_core(gx_core "${GX_ROOT}")
 
 target_link_libraries(gx_core PUBLIC gx_platform)
 
-find_package(ZLIB REQUIRED)
-target_link_libraries(gx_core PRIVATE ZLIB::ZLIB)
+# zlib: build the copy already vendored in the emulator tree (libchdr deps)
+# instead of an external one. Keeps every artifact self-contained — the IDA
+# plugin in particular must not depend on a zlib1.dll that IDA does not ship —
+# and drops one platform dependency.
+file(GLOB GX_ZLIB_SOURCES "${GX_ROOT}/core/cd_hw/libchdr/deps/zlib-1.3.1/*.c")
+add_library(gx_zlib STATIC ${GX_ZLIB_SOURCES})
+target_include_directories(gx_zlib PUBLIC "${GX_ROOT}/core/cd_hw/libchdr/deps/zlib-1.3.1")
+target_compile_definitions(gx_zlib PRIVATE _CRT_SECURE_NO_WARNINGS)
+add_library(ZLIB::ZLIB ALIAS gx_zlib)
+
+target_link_libraries(gx_core PRIVATE gx_zlib)
 
 if (GX_ENABLE_CHD)
   gx_add_libchdr(gx_libchdr "${GX_ROOT}")
   target_link_libraries(gx_core PUBLIC gx_libchdr)
 endif()
 
-find_package(Protobuf CONFIG REQUIRED)
-find_package(gRPC CONFIG REQUIRED)
-
-set(PROTO_SRC_DIR "${SMD_IDA_ROOT}/proto")
-
-set(PROTO_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
-file(MAKE_DIRECTORY ${PROTO_GEN_DIR})
-
-file(GLOB PROTO_FILES ${PROTO_SRC_DIR}/*.proto)
-list(FILTER PROTO_FILES EXCLUDE REGEX "z80")
-
-add_library(debug_proto_lib STATIC)
-target_sources(debug_proto_lib PRIVATE ${PROTO_FILES})
-
-target_link_libraries(debug_proto_lib PUBLIC protobuf::libprotobuf gRPC::grpc)
-target_include_directories(debug_proto_lib PUBLIC "$<BUILD_INTERFACE:${PROTO_GEN_DIR}>")
-
-protobuf_generate(
-    TARGET debug_proto_lib
-	LANGUAGE cpp
-    IMPORT_DIRS "${PROTO_SRC_DIR}"
-    PROTOC_OUT_DIR "${PROTO_GEN_DIR}")
-
-protobuf_generate(
-    TARGET          debug_proto_lib
-    LANGUAGE        grpc
-    IMPORT_DIRS     "${PROTO_SRC_DIR}"
-    PROTOC_OUT_DIR  "${PROTO_GEN_DIR}"
-    GENERATE_EXTENSIONS .grpc.pb.h .grpc.pb.cc
-    PLUGIN          "protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>"
+# Shared frontend code (config, error, fileio, save_state, unzip) - reused by SDL and Qt6
+set(GX_FRONTEND_CORE "${CMAKE_CURRENT_LIST_DIR}/frontends/core")
+add_library(frontend_common STATIC
+  "${GX_FRONTEND_CORE}/config.c"
+  "${GX_FRONTEND_CORE}/error.c"
+  "${GX_FRONTEND_CORE}/fileio.c"
+  "${GX_FRONTEND_CORE}/save_state_message.cpp"
+  "${GX_FRONTEND_CORE}/gx/gx.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl/unzip.c"
 )
+target_include_directories(frontend_common PUBLIC "${GX_FRONTEND_CORE}")
+target_link_libraries(frontend_common PRIVATE gx_core gx_zlib)
+set_target_properties(frontend_common PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+# std::filesystem may require explicit link on some toolchains (e.g. GCC with libstdc++)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL ""))
+  target_link_libraries(frontend_common PRIVATE stdc++fs)
+endif()
 
-add_library(debug_lib STATIC)
-target_sources(debug_lib PRIVATE "debugger/debugger.cpp")
+# ---- Headless debugger core (NO Qt) ----
+# Emulator + debug backend + transport + host, statically linkable into any
+# frontend: the standalone Qt app, and (phase 2) the IDA 9.2+ plugin.
+# Depends only on the emulator core and frontend_common; zero UI/toolkit deps.
+add_library(smd_dgx_emu STATIC
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/GpgxBackend.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/InProcTransport.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/EmuHost.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/BridgeServer.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/debugger/RemoteBackend.cpp"   # the client side of it
+)
+if (WIN32)
+  target_link_libraries(smd_dgx_emu PUBLIC ws2_32)   # BridgeServer sockets
+endif()
+target_include_directories(smd_dgx_emu PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
+target_link_libraries(smd_dgx_emu PUBLIC gx_core frontend_common)
+set_target_properties(smd_dgx_emu PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
 
-target_compile_definitions(debug_lib PRIVATE $<$<BOOL:${DEBUG_68K}>:DEBUG_68K>)
-
-target_link_libraries(debug_lib PRIVATE debug_proto_lib)
-
-find_package(OpenGL REQUIRED)
 find_package(SDL2 CONFIG REQUIRED)
-find_package(imgui CONFIG REQUIRED)
 
-set(GX_PLATFORM_ROOT "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl")
-add_library(gx_platform_lib "${GX_PLATFORM_ROOT}/sdl.c" "${GX_PLATFORM_ROOT}/config.c" "${GX_PLATFORM_ROOT}/error.c" "${GX_PLATFORM_ROOT}/fileio.c" "${GX_PLATFORM_ROOT}/unzip.c")
-target_link_libraries(gx_platform_lib PRIVATE gx_core)
+# ---- Audio device ----
+#
+# Its own target so the backend's dependency travels with it. Every host used
+# to have to know that audio means winmm, which is precisely how the audio
+# device ended up being the one thing keeping the hosts on Windows.
+add_library(gx_audio STATIC "${CMAKE_CURRENT_LIST_DIR}/platform/AudioOutput.cpp")
+target_include_directories(gx_audio PUBLIC "${CMAKE_CURRENT_LIST_DIR}/platform")
+if (WIN32)
+  target_link_libraries(gx_audio PRIVATE winmm)          # waveOut
+else()
+  target_link_libraries(gx_audio PRIVATE SDL2::SDL2)
+endif()
+set_target_properties(gx_audio PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES
+                                          POSITION_INDEPENDENT_CODE ON)
 
-add_executable(smd_dgx_cmake)
-target_sources(smd_dgx_cmake PRIVATE "frontends/sdl/osd.h" "frontends/sdl/main_sdl2.cpp")
+# ---- SDL2 + ImGui frontend (optional) ----
+#
+# Optional because imgui ships no CMake config package on mainstream Linux
+# distributions, and a hard find_package(imgui CONFIG REQUIRED) here aborted
+# the configure before the Qt6 debugger — the target a Linux user actually
+# wants — was ever reached.
+option(SMD_DGX_BUILD_SDL_FRONTEND "Build the SDL2 + ImGui frontend" ON)
+find_package(OpenGL QUIET)
+find_package(imgui CONFIG QUIET)
 
-target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib debug_lib SDL2::SDL2 OpenGL::GL imgui::imgui)
+if (SMD_DGX_BUILD_SDL_FRONTEND AND OpenGL_FOUND AND imgui_FOUND)
+  set(GX_PLATFORM_SDL "${CMAKE_CURRENT_LIST_DIR}/frontends/sdl")
+  add_library(gx_platform_lib STATIC "${GX_PLATFORM_SDL}/sdl.c")
+  target_include_directories(gx_platform_lib PUBLIC "${GX_PLATFORM_SDL}" "${GX_FRONTEND_CORE}")
+  target_link_libraries(gx_platform_lib PRIVATE gx_core frontend_common)
 
-if (CMAKE_VERSION VERSION_GREATER 3.12)
+  add_executable(smd_dgx_cmake)
+  target_sources(smd_dgx_cmake PRIVATE "frontends/sdl/osd.h" "frontends/sdl/main_sdl2.cpp")
+  target_include_directories(smd_dgx_cmake PRIVATE "frontends/sdl" "frontends/core")
+  target_link_libraries(smd_dgx_cmake PRIVATE gx_core gx_platform_lib frontend_common smd_dgx_emu SDL2::SDL2 OpenGL::GL imgui::imgui)
   set_target_properties(smd_dgx_cmake PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
-  set_target_properties(debug_lib PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED YES)
+elseif (SMD_DGX_BUILD_SDL_FRONTEND)
+  message(STATUS "SDL frontend: skipped (needs OpenGL and an imgui CMake package)")
+endif()
+
+# ---- Qt6 frontend (optional) ----
+find_package(Qt6 COMPONENTS Widgets Gui Core QUIET)
+if (Qt6_FOUND)
+  set(GX_PLATFORM_QT6 "${CMAKE_CURRENT_LIST_DIR}/frontends/qt6")
+
+  add_library(gx_platform_qt6 STATIC "${GX_PLATFORM_QT6}/qt_input.c")
+  target_include_directories(gx_platform_qt6 PUBLIC "${GX_PLATFORM_QT6}" "${GX_FRONTEND_CORE}")
+  target_link_libraries(gx_platform_qt6 PRIVATE gx_core frontend_common)
+
+  add_executable(smd_dgx_qt6)
+  target_sources(smd_dgx_qt6 PRIVATE
+    # entry point
+    "${GX_PLATFORM_QT6}/main_qt6.cpp"
+    # frontend
+    "${GX_PLATFORM_QT6}/MainWindow.h"
+    "${GX_PLATFORM_QT6}/MainWindow.cpp"
+    "${GX_PLATFORM_QT6}/ViewSettings.h"
+    "${GX_PLATFORM_QT6}/ViewSettings.cpp"
+    # views (parity set with the Gens debug windows)
+    "${GX_PLATFORM_QT6}/views/EmulatorScreen.h"
+    "${GX_PLATFORM_QT6}/views/EmulatorScreen.cpp"
+    "${GX_PLATFORM_QT6}/views/VdpRegView.h"
+    "${GX_PLATFORM_QT6}/views/VdpRegView.cpp"
+    "${GX_PLATFORM_QT6}/views/SaveStateView.h"
+    "${GX_PLATFORM_QT6}/views/SaveStateView.cpp"
+    "${GX_PLATFORM_QT6}/views/ScrollView.h"
+    "${GX_PLATFORM_QT6}/views/ScrollView.cpp"
+    "${GX_PLATFORM_QT6}/views/VdpRamView.h"
+    "${GX_PLATFORM_QT6}/views/VdpRamView.cpp"
+    "${GX_PLATFORM_QT6}/views/VdpSpritesView.h"
+    "${GX_PLATFORM_QT6}/views/VdpSpritesView.cpp"
+    "${GX_PLATFORM_QT6}/views/PlaneExplorerView.h"
+    "${GX_PLATFORM_QT6}/views/PlaneExplorerView.cpp"
+    "${GX_PLATFORM_QT6}/views/SoundDebugView.h"
+    "${GX_PLATFORM_QT6}/views/SoundDebugView.cpp"
+    "${GX_PLATFORM_QT6}/views/MemoryView.h"
+    "${GX_PLATFORM_QT6}/views/MemoryView.cpp"
+    "${GX_PLATFORM_QT6}/views/RamSearchView.h"
+    "${GX_PLATFORM_QT6}/views/RamSearchView.cpp"
+    "${GX_PLATFORM_QT6}/views/RamWatchView.h"
+    "${GX_PLATFORM_QT6}/views/RamWatchView.cpp"
+  )
+
+  target_include_directories(smd_dgx_qt6 PRIVATE
+    "${GX_PLATFORM_QT6}"
+    "${GX_PLATFORM_QT6}/views"
+    "${CMAKE_CURRENT_LIST_DIR}"          # for "debugger/..." includes
+    "${CMAKE_CURRENT_LIST_DIR}/frontends/core"
+  )
+
+  target_link_libraries(smd_dgx_qt6 PRIVATE
+    gx_core gx_platform_qt6 frontend_common smd_dgx_emu gx_audio
+    Qt6::Widgets Qt6::Gui Qt6::Core
+  )
+
+  set_target_properties(smd_dgx_qt6 PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED YES
+    AUTOMOC ON
+  )
+
+  if(WIN32)
+    set_target_properties(smd_dgx_qt6 PROPERTIES WIN32_EXECUTABLE TRUE)
+    get_filename_component(_qt6_root "${Qt6_DIR}/../.." REALPATH)
+    add_custom_command(TARGET smd_dgx_qt6 POST_BUILD
+      COMMAND "${CMAKE_COMMAND}" -DEXE_PATH="$<TARGET_FILE:smd_dgx_qt6>" -DQT_ROOT="${_qt6_root}" -P "${CMAKE_CURRENT_LIST_DIR}/cmake/deploy_qt.cmake"
+      COMMENT "Deploy Qt DLLs and plugins to build folder"
+    )
+  endif()
+endif()
+
+# ---- IDA 9.2+ modules (optional, gated on IDA_SDK_DIR) ----
+add_subdirectory(ida_plugin)   # debugger plugin; also locates IDA_LIB
+add_subdirectory(ida_loader)   # ROM loader (uses IDA_LIB found above)
+
+# ---- Tests ----
+option(SMD_DGX_BUILD_TESTS "Build the test suite" ON)
+if (SMD_DGX_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(tests)
 endif()
